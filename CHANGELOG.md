@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-29
+
+### Added
+- Serial command interface for runtime control without touching the BOOT button. Commands: `pause`, `resume` (alias `start`), `toggle`, `status`, `now`, `help` (alias `?`).
+- `now` command forces the next action immediately, useful for testing the setup.
+- `status` command prints wiggler state, BLE connection, active layout, and time until the next action.
+- Boot message now mentions the `help` command so it's discoverable.
+
+### Changed
+- Serial commands and button input are evaluated at every wait point inside the mouse and keyboard loops, so both react mid-action instead of waiting for the current step to finish.
+- Internal `forceAction` flag added to cleanly trigger the next action on demand.
+
 ## [1.1.0] - 2026-05-29
 
 ### Added

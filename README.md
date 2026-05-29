@@ -12,6 +12,7 @@ I made this so my work laptop stops dropping to idle during long calls and readi
 - Waits a random 10 to 90 seconds between actions
 - Pauses and resumes from the onboard BOOT button
 - Shows its state on the onboard LED
+- Accepts text commands over serial when a host is connected (pause, resume, status, and a few more)
 - Logs to serial only when a host has the port open, so it stays quiet on a power bank
 - Supports QWERTY and QWERTZ keyboard layouts via a single constant
 
@@ -89,6 +90,19 @@ One catch: BLE only advertises while nothing is connected. If one host is alread
 | Solid | Paused |
 
 Most SuperMini boards wire this LED inverted (LOW = on), which the code already handles. If yours runs backwards or never lights up, the comments in `setLed()` tell you what to flip.
+
+**Serial commands:** when the board is plugged into a host with the serial monitor open (115200 baud), you can type commands and press Enter. Useful when the board sits somewhere the button is hard to reach.
+
+| Command | Effect |
+|---|---|
+| `pause` | Pauses the wiggler |
+| `resume` | Resumes (alias: `start`) |
+| `toggle` | Switches between active and paused |
+| `status` | Prints current state, BLE connection, layout, time until next action |
+| `now` | Triggers the next action immediately, useful for testing |
+| `help` | Lists the commands (alias: `?`) |
+
+Commands work mid-action, same as the BOOT button. On a power bank without a host, serial input is gone and the button is the only control.
 
 ## A note on drift
 
