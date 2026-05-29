@@ -8,13 +8,13 @@ I made this so my work laptop stops dropping to idle during long calls and readi
 
 - Pairs as a combined mouse and keyboard over BLE
 - Moves the cursor along curved paths instead of straight lines, with real acceleration and braking. It hops between a few random points, then heads back to center
-- Types into whatever window has focus: a word or a short phrase at 60 to 80 WPM, uneven keystrokes, the occasional pause. Then deletes it again
-- Waits a random 10 to 90 seconds between actions
+- Types into whatever window has focus: a word or a short phrase at 60 to 80 WPM by default, uneven keystrokes, the occasional pause. Then deletes it again
+- Waits a random interval between actions (defaults to 10 to 90 seconds)
 - Pauses and resumes from the onboard BOOT button
 - Shows its state on the onboard LED
-- Accepts text commands over serial when a host is connected (pause, resume, status, and a few more)
+- Accepts text commands over serial: pause, resume, status, and a full set of runtime configuration commands. WPM, interval, field size, layout, and per-mode toggles can all be changed live without reflashing
+- Supports QWERTY and QWERTZ keyboard layouts
 - Logs to serial only when a host has the port open, so it stays quiet on a power bank
-- Supports QWERTY and QWERTZ keyboard layouts via a single constant
 
 ## Hardware
 
@@ -53,15 +53,24 @@ Get `USB CDC On Boot` right. Leave it off and the serial monitor over USB stays 
 
 ## Configuration
 
-Before flashing, open `esp32_ble_wiggler.ino` and check one constant near the top:
+There are two layers:
+
+**Sketch defaults** (used on every boot, edit before flashing). Near the top of `esp32_ble_wiggler.ino`:
 
 ```cpp
-const bool QWERTZ = true;
+const bool DEFAULT_QWERTZ = true;
+const int DEFAULT_WPM_MIN = 60;
+const int DEFAULT_WPM_MAX = 80;
+const unsigned long DEFAULT_INTERVAL_MIN_SEC = 10;
+const unsigned long DEFAULT_INTERVAL_MAX_SEC = 90;
+const int DEFAULT_FIELD = 600;
+const bool DEFAULT_MOUSE_ENABLED = true;
+const bool DEFAULT_KEYBOARD_ENABLED = true;
 ```
 
-Leave it at `true` if your host uses a German (or any QWERTZ) keyboard layout, set it to `false` for QWERTY (US, UK, most others). The wiggler sends key positions over HID, not characters. Without the flag a QWERTZ host turns `yet` into `zet`, because Y and Z sit on swapped keys. The constant swaps them before sending so the output matches the source.
+**Runtime settings** (changed via serial commands, see Usage). Everything in the list above can be modified live without reflashing. Runtime changes are not saved across power cycles. For permanent changes, edit the defaults and reflash, or use `reset` over serial to restore the defaults during a session.
 
-This covers the included word pool. If you later add umlauts or special characters, you'll need more layout handling than this single flag.
+About the layout default: the wiggler sends key positions over HID, not characters. A QWERTZ host turns `yet` into `zet` because Y and Z sit on swapped keys. With `DEFAULT_QWERTZ = true`, the code swaps y and z before sending. Set to `false` for QWERTY.
 
 ## Flashing
 
@@ -91,27 +100,46 @@ One catch: BLE only advertises while nothing is connected. If one host is alread
 
 Most SuperMini boards wire this LED inverted (LOW = on), which the code already handles. If yours runs backwards or never lights up, the comments in `setLed()` tell you what to flip.
 
-**Serial commands:** when the board is plugged into a host with the serial monitor open (115200 baud), you can type commands and press Enter. Useful when the board sits somewhere the button is hard to reach.
+**Serial commands:** plug the board into a host, open the serial monitor at 115200 baud, type a command, hit Enter. Useful when the board sits where the button is hard to reach, and for changing the behavior without reflashing.
+
+Control:
 
 | Command | Effect |
 |---|---|
 | `pause` | Pauses the wiggler |
 | `resume` | Resumes (alias: `start`) |
 | `toggle` | Switches between active and paused |
-| `status` | Prints current state, BLE connection, layout, time until next action |
 | `now` | Triggers the next action immediately, useful for testing |
+
+Info:
+
+| Command | Effect |
+|---|---|
+| `status` | Prints current state, BLE connection, and all settings |
 | `help` | Lists the commands (alias: `?`) |
 
-Commands work mid-action, same as the BOOT button. On a power bank without a host, serial input is gone and the button is the only control.
+Configuration (without arguments these show the current value):
+
+| Command | Range | Effect |
+|---|---|---|
+| `wpm <min> <max>` | 10 to 200 | Typing speed range in WPM |
+| `interval <min> <max>` | 1 to 3600 | Delay between actions in seconds |
+| `field <size>` | 50 to 2000 | Mouse movement field size in px |
+| `layout <qwerty\|qwertz>` | - | Keyboard layout |
+| `mouse <on\|off>` | - | Enable/disable mouse actions |
+| `keyboard <on\|off>` | - | Enable/disable keyboard actions |
+| `reset` | - | Reset all settings to sketch defaults |
+
+You cannot disable both mouse and keyboard at the same time, the wiggler needs at least one. Commands work mid-action, same as the BOOT button. On a power bank without a host, serial is gone and the button is the only control.
 
 ## A note on drift
 
-A BLE mouse sends *relative* movement only. The board has no idea where the cursor actually sits. The virtual 600x600 field keeps drift in check by returning to center each cycle, but it can't cancel it entirely. Two things make it worse:
+A BLE mouse sends *relative* movement only. The board has no idea where the cursor actually sits. The virtual field keeps drift in check by returning to center each cycle, but it can't cancel it entirely. Two things make it worse:
 
 - Windows pointer acceleration ("Enhance pointer precision"). Turn it off for clean 1:1 movement.
 - Screen edges. Hit one and the relative moves get swallowed, and the model drifts away from reality.
 
-For a jiggler this barely matters. The cursor only has to look alive. If it keeps creeping into one corner over a long session, drop the `FIELD` value.
+For a jiggler this barely matters. The cursor only has to look alive. If it keeps creeping into one corner over a long session, drop the field size with `field 400`.
 
 ## Case
 

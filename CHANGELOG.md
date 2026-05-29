@@ -2,6 +2,29 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-29
+
+### Added
+- Runtime configuration via serial commands. All key behaviors can be changed without reflashing:
+  - `wpm <min> <max>` sets the typing speed range (10 to 200 WPM)
+  - `interval <min> <max>` sets the delay between actions in seconds (1 to 3600)
+  - `field <size>` sets the mouse movement field size in pixels (50 to 2000)
+  - `layout <qwerty|qwertz>` switches the keyboard layout live
+  - `mouse <on|off>` and `keyboard <on|off>` enable or disable each action type independently
+  - `reset` restores all settings to the sketch defaults
+- Configuration commands without arguments print the current value.
+- `status` now lists all settings plus the BLE state and time until the next action.
+- `DEFAULT_*` constants at the top of the sketch define the boot-time values.
+
+### Changed
+- `QWERTZ` is no longer a constant. It's a regular variable with `DEFAULT_QWERTZ` as its starting value.
+- The `FIELD` constant is replaced by the `fieldSize` variable with `DEFAULT_FIELD` as its starting value. Changing it at runtime clamps the virtual cursor position into the new bounds.
+- Mode selection in the main loop respects the `mouseEnabled` and `keyboardEnabled` flags. If only one is on, only that action type runs.
+
+### Notes
+- Runtime changes are not persisted. After a power cycle, settings revert to the sketch defaults. For permanent changes, edit the `DEFAULT_*` constants and reflash. Optional NVS-based persistence could come in a later release.
+- Disabling both modes at once is prevented. The wiggler needs at least one action type enabled.
+
 ## [1.2.0] - 2026-05-29
 
 ### Added
