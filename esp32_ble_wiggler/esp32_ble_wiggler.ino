@@ -9,20 +9,15 @@
  *
  * Controls:
  *   BOOT button (GPIO 9) - pause / resume at any time
- *   Onboard LED (GPIO 8) - status indicator (heartbeat = active, solid = paused)
+ *   Onboard LED (GPIO 8) - status indicator
  *   Serial commands     - type 'help' for the full list
  *
- * Version: 1.4.0
- *
- * Settings persistence: All configuration changes via serial commands are
- * automatically stored in NVS (non-volatile storage) and restored on every
- * boot. Use 'reset' to clear stored settings and return to sketch defaults.
+ * Version: 1.5.0
  */
 
 #include <BleCombo.h>
 #include <Preferences.h>
 
-// Device identity as seen in the host's Bluetooth list
 BleComboKeyboard keyboard("Logitech Combo", "Logitech", 100);
 BleComboMouse mouse(&keyboard);
 
@@ -31,7 +26,7 @@ unsigned long interval = 30000;
 bool lastConnectionState = false;
 bool forceAction = false;
 
-// === SINGLE WORDS ===
+// === BUILT-IN WORDS ===
 const char* words[] = {
   "ok ", "test ", "hello ", "note ", "info ", "check ",
   "todo ", "done ", "sure ", "thanks ", "yet ", "quick ",
@@ -39,7 +34,7 @@ const char* words[] = {
 };
 const int wordCount = 18;
 
-// === SHORT PHRASES ===
+// === BUILT-IN PHRASES ===
 const char* phrases[] = {
   "todo check mail ",
   "call back later ",
@@ -56,7 +51,13 @@ const char* phrases[] = {
 };
 const int phraseCount = 12;
 
-// === DEFAULTS (used when NVS is empty or after 'reset') ===
+// === CUSTOM WORD POOL (loaded from NVS) ===
+const int MAX_CUSTOM_WORDS = 20;
+const int MAX_WORD_LEN = 50;
+String customWords[MAX_CUSTOM_WORDS];
+int customWordCount = 0;
+
+// === DEFAULTS ===
 const int DEFAULT_WPM_MIN = 60;
 const int DEFAULT_WPM_MAX = 80;
 const unsigned long DEFAULT_INTERVAL_MIN_SEC = 10;
@@ -66,7 +67,7 @@ const bool DEFAULT_QWERTZ = true;
 const bool DEFAULT_MOUSE_ENABLED = true;
 const bool DEFAULT_KEYBOARD_ENABLED = true;
 
-// === RUNTIME SETTINGS (loaded from NVS in setup, modified via serial) ===
+// === RUNTIME SETTINGS ===
 int wpmMin;
 int wpmMax;
 unsigned long intervalMinSec;
@@ -76,11 +77,11 @@ bool qwertz;
 bool mouseEnabled;
 bool keyboardEnabled;
 
-// === PERSISTENT STORAGE (NVS) ===
+// === PERSISTENT STORAGE ===
 Preferences prefs;
 const char* PREFS_NS = "wiggler";
 
-// === BOOT BUTTON / PAUSE TOGGLE ===
+// === BOOT BUTTON ===
 const int BUTTON_PIN = 9;
 volatile bool buttonPressed = false;
 bool wigglerActive = true;
@@ -98,7 +99,7 @@ const int MARGIN = 20;
 
 // === SERIAL COMMAND BUFFER ===
 String serialBuffer = "";
-const int MAX_CMD_LEN = 64;
+const int MAX_CMD_LEN = 80;
 
 void IRAM_ATTR buttonISR() {
   buttonPressed = true;
@@ -109,13 +110,13 @@ void setup() {
   delay(1500);
 
   Serial.println("\n========================================");
-  Serial.println("   ESP32-C3 BLE Wiggler v1.4.0");
+  Serial.println("   ESP32-C3 BLE Wiggler v1.5.0");
   Serial.println("========================================");
 
-  // Open NVS namespace in read/write mode and load settings
   prefs.begin(PREFS_NS, false);
-  bool hasStored = prefs.isKey("wpmMin"); // any key works as a marker
+  bool hasStored = prefs.isKey("wpmMin");
   loadSettings();
+  loadCustomWords();
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
@@ -136,6 +137,8 @@ void setup() {
   Serial.println(qwertz ? "QWERTZ" : "QWERTY");
   Serial.print("Settings: ");
   Serial.println(hasStored ? "restored from NVS" : "using defaults (no saved settings)");
+  Serial.print("Custom words: ");
+  Serial.println(customWordCount);
   Serial.println("Type 'help' for serial commands, 'status' for current settings");
   Serial.println("Waiting for connection...\n");
 }
@@ -156,15 +159,8 @@ void loop() {
     lastConnectionState = connected;
   }
 
-  if (!wigglerActive) {
-    delay(20);
-    return;
-  }
-
-  if (!mouseEnabled && !keyboardEnabled) {
-    delay(20);
-    return;
-  }
+  if (!wigglerActive) { delay(20); return; }
+  if (!mouseEnabled && !keyboardEnabled) { delay(20); return; }
 
   if (connected) {
     unsigned long now = millis();
@@ -192,9 +188,7 @@ void loop() {
       else if (doMouse) Serial.println("Mouse only");
       else Serial.println("Keyboard only");
 
-      if (doMouse) {
-        doMouseMovement();
-      }
+      if (doMouse) doMouseMovement();
 
       if (doKeyboard && wigglerActive) {
         if (doMouse) delay(random(300, 800));
@@ -213,7 +207,6 @@ void loop() {
 }
 
 // === NVS PERSISTENCE ===
-// Load all settings from NVS. Missing keys fall back to defaults.
 void loadSettings() {
   wpmMin         = prefs.getInt("wpmMin", DEFAULT_WPM_MIN);
   wpmMax         = prefs.getInt("wpmMax", DEFAULT_WPM_MAX);
@@ -223,6 +216,28 @@ void loadSettings() {
   qwertz         = prefs.getBool("qwertz", DEFAULT_QWERTZ);
   mouseEnabled   = prefs.getBool("mouseOn", DEFAULT_MOUSE_ENABLED);
   keyboardEnabled= prefs.getBool("kbdOn", DEFAULT_KEYBOARD_ENABLED);
+}
+
+// Save the full settings block at once. Used after applying a profile.
+void saveAllSettings() {
+  prefs.putInt("wpmMin", wpmMin);
+  prefs.putInt("wpmMax", wpmMax);
+  prefs.putULong("intMin", intervalMinSec);
+  prefs.putULong("intMax", intervalMaxSec);
+  prefs.putInt("field", fieldSize);
+  prefs.putBool("mouseOn", mouseEnabled);
+  prefs.putBool("kbdOn", keyboardEnabled);
+  // qwertz intentionally not saved here, profiles do not change it
+}
+
+// === CUSTOM WORDS ===
+void loadCustomWords() {
+  customWordCount = prefs.getInt("wordCount", 0);
+  if (customWordCount > MAX_CUSTOM_WORDS) customWordCount = MAX_CUSTOM_WORDS;
+  for (int i = 0; i < customWordCount; i++) {
+    String key = "w" + String(i);
+    customWords[i] = prefs.getString(key.c_str(), "");
+  }
 }
 
 // === LED CONTROL ===
@@ -257,7 +272,7 @@ void updateLed() {
   }
 }
 
-// === BUTTON HANDLER ===
+// === BUTTON ===
 void handleButton() {
   if (buttonPressed) {
     buttonPressed = false;
@@ -275,7 +290,6 @@ void handleButton() {
 void handleSerial() {
   while (Serial.available() > 0) {
     char c = Serial.read();
-
     if (c == '\n' || c == '\r') {
       if (serialBuffer.length() > 0) {
         processCommand(serialBuffer);
@@ -308,26 +322,20 @@ bool splitAtSpace(String input, String &first, String &second) {
 
 void processCommand(String cmd) {
   cmd.trim();
-  cmd.toLowerCase();
+  // Don't lowercase the whole command, because 'word add' takes a free-text argument
+  // that the user may want with mixed case. We lowercase only the command name below.
   if (cmd.length() == 0) return;
 
   String name, args;
   splitAtSpace(cmd, name, args);
+  name.toLowerCase();
 
   if (name == "pause") {
-    if (wigglerActive) {
-      wigglerActive = false;
-      Serial.println(">>> COMMAND: paused\n");
-    } else {
-      Serial.println(">>> Already paused\n");
-    }
+    if (wigglerActive) { wigglerActive = false; Serial.println(">>> COMMAND: paused\n"); }
+    else Serial.println(">>> Already paused\n");
   } else if (name == "resume" || name == "start") {
-    if (!wigglerActive) {
-      wigglerActive = true;
-      Serial.println(">>> COMMAND: resumed\n");
-    } else {
-      Serial.println(">>> Already active\n");
-    }
+    if (!wigglerActive) { wigglerActive = true; Serial.println(">>> COMMAND: resumed\n"); }
+    else Serial.println(">>> Already active\n");
   } else if (name == "toggle") {
     wigglerActive = !wigglerActive;
     Serial.print(">>> COMMAND: toggled, now ");
@@ -335,33 +343,31 @@ void processCommand(String cmd) {
   } else if (name == "status") {
     printStatus();
   } else if (name == "now") {
-    if (!wigglerActive) {
-      Serial.println(">>> Wiggler is paused, resume first\n");
-    } else if (!keyboard.isConnected()) {
-      Serial.println(">>> No BLE connection, cannot trigger\n");
-    } else if (!mouseEnabled && !keyboardEnabled) {
-      Serial.println(">>> Both modes disabled, enable at least one\n");
-    } else {
-      forceAction = true;
-      Serial.println(">>> COMMAND: triggering action now\n");
-    }
+    if (!wigglerActive) Serial.println(">>> Wiggler is paused, resume first\n");
+    else if (!keyboard.isConnected()) Serial.println(">>> No BLE connection, cannot trigger\n");
+    else if (!mouseEnabled && !keyboardEnabled) Serial.println(">>> Both modes disabled\n");
+    else { forceAction = true; Serial.println(">>> COMMAND: triggering action now\n"); }
   } else if (name == "help" || name == "?") {
     printHelp();
   } else if (name == "reset") {
     resetDefaults();
     Serial.println(">>> Settings reset to defaults, NVS cleared\n");
   } else if (name == "wpm") {
-    cmdWpm(args);
+    String a = args; a.toLowerCase(); cmdWpm(a);
   } else if (name == "interval") {
-    cmdInterval(args);
+    String a = args; a.toLowerCase(); cmdInterval(a);
   } else if (name == "field") {
-    cmdField(args);
+    String a = args; a.toLowerCase(); cmdField(a);
   } else if (name == "layout") {
-    cmdLayout(args);
+    String a = args; a.toLowerCase(); cmdLayout(a);
   } else if (name == "mouse") {
-    cmdMouse(args);
+    String a = args; a.toLowerCase(); cmdMouse(a);
   } else if (name == "keyboard") {
-    cmdKeyboard(args);
+    String a = args; a.toLowerCase(); cmdKeyboard(a);
+  } else if (name == "profile") {
+    String a = args; a.toLowerCase(); cmdProfile(a);
+  } else if (name == "word") {
+    cmdWord(args); // args case-preserved for word add
   } else {
     Serial.print(">>> Unknown command: '");
     Serial.print(name);
@@ -370,210 +376,225 @@ void processCommand(String cmd) {
   }
 }
 
-// === CONFIG COMMANDS (each persists its setting to NVS on success) ===
+// === CONFIG COMMANDS ===
 void cmdWpm(String args) {
   if (args.length() == 0) {
-    Serial.print(">>> WPM: ");
-    Serial.print(wpmMin);
-    Serial.print(" to ");
-    Serial.println(wpmMax);
+    Serial.print(">>> WPM: "); Serial.print(wpmMin); Serial.print(" to "); Serial.println(wpmMax);
     return;
   }
   String a, b;
-  if (!splitAtSpace(args, a, b)) {
-    Serial.println(">>> Usage: wpm <min> <max>  (e.g. wpm 60 80)\n");
-    return;
-  }
-  int newMin = a.toInt();
-  int newMax = b.toInt();
+  if (!splitAtSpace(args, a, b)) { Serial.println(">>> Usage: wpm <min> <max>\n"); return; }
+  int newMin = a.toInt(), newMax = b.toInt();
   if (newMin < 10 || newMax > 200 || newMin > newMax) {
-    Serial.println(">>> Invalid range. Use 10-200, with min <= max\n");
-    return;
+    Serial.println(">>> Invalid range. Use 10-200, with min <= max\n"); return;
   }
-  wpmMin = newMin;
-  wpmMax = newMax;
-  prefs.putInt("wpmMin", wpmMin);
-  prefs.putInt("wpmMax", wpmMax);
-  Serial.print(">>> WPM set to ");
-  Serial.print(wpmMin);
-  Serial.print(" - ");
-  Serial.print(wpmMax);
+  wpmMin = newMin; wpmMax = newMax;
+  prefs.putInt("wpmMin", wpmMin); prefs.putInt("wpmMax", wpmMax);
+  Serial.print(">>> WPM set to "); Serial.print(wpmMin); Serial.print(" - "); Serial.print(wpmMax);
   Serial.println(" (saved)\n");
 }
 
 void cmdInterval(String args) {
   if (args.length() == 0) {
-    Serial.print(">>> Interval: ");
-    Serial.print(intervalMinSec);
-    Serial.print(" to ");
-    Serial.print(intervalMaxSec);
-    Serial.println(" s");
+    Serial.print(">>> Interval: "); Serial.print(intervalMinSec); Serial.print(" to ");
+    Serial.print(intervalMaxSec); Serial.println(" s");
     return;
   }
   String a, b;
-  if (!splitAtSpace(args, a, b)) {
-    Serial.println(">>> Usage: interval <min> <max>  (in seconds, e.g. interval 10 90)\n");
-    return;
-  }
-  long newMin = a.toInt();
-  long newMax = b.toInt();
+  if (!splitAtSpace(args, a, b)) { Serial.println(">>> Usage: interval <min> <max>\n"); return; }
+  long newMin = a.toInt(), newMax = b.toInt();
   if (newMin < 1 || newMax > 3600 || newMin > newMax) {
-    Serial.println(">>> Invalid range. Use 1-3600 seconds, with min <= max\n");
-    return;
+    Serial.println(">>> Invalid range. Use 1-3600 seconds, with min <= max\n"); return;
   }
-  intervalMinSec = (unsigned long)newMin;
-  intervalMaxSec = (unsigned long)newMax;
-  prefs.putULong("intMin", intervalMinSec);
-  prefs.putULong("intMax", intervalMaxSec);
-  Serial.print(">>> Interval set to ");
-  Serial.print(intervalMinSec);
-  Serial.print(" - ");
-  Serial.print(intervalMaxSec);
-  Serial.println(" s (saved)\n");
+  intervalMinSec = (unsigned long)newMin; intervalMaxSec = (unsigned long)newMax;
+  prefs.putULong("intMin", intervalMinSec); prefs.putULong("intMax", intervalMaxSec);
+  Serial.print(">>> Interval set to "); Serial.print(intervalMinSec); Serial.print(" - ");
+  Serial.print(intervalMaxSec); Serial.println(" s (saved)\n");
 }
 
 void cmdField(String args) {
   if (args.length() == 0) {
-    Serial.print(">>> Field: ");
-    Serial.print(fieldSize);
-    Serial.print(" x ");
-    Serial.print(fieldSize);
-    Serial.println(" px");
+    Serial.print(">>> Field: "); Serial.print(fieldSize); Serial.print(" x ");
+    Serial.print(fieldSize); Serial.println(" px");
     return;
   }
   int newSize = args.toInt();
-  if (newSize < 50 || newSize > 2000) {
-    Serial.println(">>> Invalid size. Use 50-2000 px\n");
-    return;
-  }
+  if (newSize < 50 || newSize > 2000) { Serial.println(">>> Invalid size. Use 50-2000 px\n"); return; }
   fieldSize = newSize;
   vx = constrain(vx, (float)MARGIN, (float)(fieldSize - MARGIN));
   vy = constrain(vy, (float)MARGIN, (float)(fieldSize - MARGIN));
   prefs.putInt("field", fieldSize);
-  Serial.print(">>> Field set to ");
-  Serial.print(fieldSize);
-  Serial.print(" x ");
-  Serial.print(fieldSize);
-  Serial.println(" px (saved)\n");
+  Serial.print(">>> Field set to "); Serial.print(fieldSize); Serial.print(" x ");
+  Serial.print(fieldSize); Serial.println(" px (saved)\n");
 }
 
 void cmdLayout(String args) {
-  if (args.length() == 0) {
-    Serial.print(">>> Layout: ");
-    Serial.println(qwertz ? "QWERTZ" : "QWERTY");
-    return;
-  }
-  if (args == "qwertz") {
-    qwertz = true;
-    prefs.putBool("qwertz", qwertz);
-    Serial.println(">>> Layout set to QWERTZ (saved)\n");
-  } else if (args == "qwerty") {
-    qwertz = false;
-    prefs.putBool("qwertz", qwertz);
-    Serial.println(">>> Layout set to QWERTY (saved)\n");
-  } else {
-    Serial.println(">>> Usage: layout <qwerty|qwertz>\n");
-  }
+  if (args.length() == 0) { Serial.print(">>> Layout: "); Serial.println(qwertz ? "QWERTZ" : "QWERTY"); return; }
+  if (args == "qwertz") { qwertz = true; prefs.putBool("qwertz", true); Serial.println(">>> Layout set to QWERTZ (saved)\n"); }
+  else if (args == "qwerty") { qwertz = false; prefs.putBool("qwertz", false); Serial.println(">>> Layout set to QWERTY (saved)\n"); }
+  else Serial.println(">>> Usage: layout <qwerty|qwertz>\n");
 }
 
 void cmdMouse(String args) {
-  if (args.length() == 0) {
-    Serial.print(">>> Mouse: ");
-    Serial.println(mouseEnabled ? "ON" : "OFF");
-    return;
-  }
-  if (args == "on") {
-    mouseEnabled = true;
-    prefs.putBool("mouseOn", mouseEnabled);
-    Serial.println(">>> Mouse: ON (saved)\n");
-  } else if (args == "off") {
-    if (!keyboardEnabled) {
-      Serial.println(">>> Cannot disable mouse, keyboard is already off. Enable keyboard first.\n");
-      return;
-    }
-    mouseEnabled = false;
-    prefs.putBool("mouseOn", mouseEnabled);
-    Serial.println(">>> Mouse: OFF (saved)\n");
-  } else {
-    Serial.println(">>> Usage: mouse <on|off>\n");
-  }
+  if (args.length() == 0) { Serial.print(">>> Mouse: "); Serial.println(mouseEnabled ? "ON" : "OFF"); return; }
+  if (args == "on") { mouseEnabled = true; prefs.putBool("mouseOn", true); Serial.println(">>> Mouse: ON (saved)\n"); }
+  else if (args == "off") {
+    if (!keyboardEnabled) { Serial.println(">>> Cannot disable mouse, keyboard is already off\n"); return; }
+    mouseEnabled = false; prefs.putBool("mouseOn", false); Serial.println(">>> Mouse: OFF (saved)\n");
+  } else Serial.println(">>> Usage: mouse <on|off>\n");
 }
 
 void cmdKeyboard(String args) {
+  if (args.length() == 0) { Serial.print(">>> Keyboard: "); Serial.println(keyboardEnabled ? "ON" : "OFF"); return; }
+  if (args == "on") { keyboardEnabled = true; prefs.putBool("kbdOn", true); Serial.println(">>> Keyboard: ON (saved)\n"); }
+  else if (args == "off") {
+    if (!mouseEnabled) { Serial.println(">>> Cannot disable keyboard, mouse is already off\n"); return; }
+    keyboardEnabled = false; prefs.putBool("kbdOn", false); Serial.println(">>> Keyboard: OFF (saved)\n");
+  } else Serial.println(">>> Usage: keyboard <on|off>\n");
+}
+
+// === PROFILES ===
+// Profiles do not change the qwertz/layout setting, since that depends on the host.
+void cmdProfile(String args) {
   if (args.length() == 0) {
-    Serial.print(">>> Keyboard: ");
-    Serial.println(keyboardEnabled ? "ON" : "OFF");
+    Serial.println(">>> Available profiles:");
+    Serial.println("    work     - balanced defaults (60-80 WPM, 30-120 s, both modes)");
+    Serial.println("    stealth  - mouse only, long intervals, slow movements");
+    Serial.println("    intense  - short intervals, fast typing, both modes");
+    Serial.println("    test     - 5 s intervals for demos and testing");
+    Serial.println(">>> Usage: profile <name>\n");
     return;
   }
-  if (args == "on") {
-    keyboardEnabled = true;
-    prefs.putBool("kbdOn", keyboardEnabled);
-    Serial.println(">>> Keyboard: ON (saved)\n");
-  } else if (args == "off") {
-    if (!mouseEnabled) {
-      Serial.println(">>> Cannot disable keyboard, mouse is already off. Enable mouse first.\n");
-      return;
-    }
-    keyboardEnabled = false;
-    prefs.putBool("kbdOn", keyboardEnabled);
-    Serial.println(">>> Keyboard: OFF (saved)\n");
+  if (args == "work") {
+    wpmMin = 60; wpmMax = 80;
+    intervalMinSec = 30; intervalMaxSec = 120;
+    fieldSize = 600;
+    mouseEnabled = true; keyboardEnabled = true;
+  } else if (args == "stealth") {
+    wpmMin = 50; wpmMax = 70;
+    intervalMinSec = 120; intervalMaxSec = 300;
+    fieldSize = 400;
+    mouseEnabled = true; keyboardEnabled = false;
+  } else if (args == "intense") {
+    wpmMin = 80; wpmMax = 110;
+    intervalMinSec = 5; intervalMaxSec = 30;
+    fieldSize = 800;
+    mouseEnabled = true; keyboardEnabled = true;
+  } else if (args == "test") {
+    wpmMin = 80; wpmMax = 100;
+    intervalMinSec = 5; intervalMaxSec = 10;
+    fieldSize = 400;
+    mouseEnabled = true; keyboardEnabled = true;
   } else {
-    Serial.println(">>> Usage: keyboard <on|off>\n");
+    Serial.println(">>> Unknown profile. Available: work, stealth, intense, test\n");
+    return;
+  }
+  vx = constrain(vx, (float)MARGIN, (float)(fieldSize - MARGIN));
+  vy = constrain(vy, (float)MARGIN, (float)(fieldSize - MARGIN));
+  saveAllSettings();
+  Serial.print(">>> Profile applied: "); Serial.print(args); Serial.println(" (saved)");
+  printStatus();
+}
+
+// === CUSTOM WORD MANAGEMENT ===
+void cmdWord(String args) {
+  String sub, rest;
+  splitAtSpace(args, sub, rest);
+  sub.toLowerCase();
+
+  if (sub == "" || sub == "list") {
+    Serial.println("\n>>> Custom words:");
+    if (customWordCount == 0) {
+      Serial.println("    (none, using only built-in pool)");
+    } else {
+      for (int i = 0; i < customWordCount; i++) {
+        Serial.print("    "); Serial.print(i); Serial.print(": \"");
+        Serial.print(customWords[i]); Serial.println("\"");
+      }
+    }
+    Serial.print("    "); Serial.print(customWordCount);
+    Serial.print(" / "); Serial.print(MAX_CUSTOM_WORDS); Serial.println(" used\n");
+  } else if (sub == "add") {
+    if (rest.length() == 0) { Serial.println(">>> Usage: word add <text>\n"); return; }
+    if (customWordCount >= MAX_CUSTOM_WORDS) {
+      Serial.print(">>> Word pool full ("); Serial.print(MAX_CUSTOM_WORDS);
+      Serial.println("), remove some first\n"); return;
+    }
+    if (rest.length() > MAX_WORD_LEN) {
+      Serial.print(">>> Too long, max "); Serial.print(MAX_WORD_LEN); Serial.println(" chars\n"); return;
+    }
+    // Ensure a trailing space so words flow naturally when typed back to back
+    if (!rest.endsWith(" ")) rest += " ";
+    customWords[customWordCount] = rest;
+    String key = "w" + String(customWordCount);
+    prefs.putString(key.c_str(), rest);
+    customWordCount++;
+    prefs.putInt("wordCount", customWordCount);
+    Serial.print(">>> Added word #"); Serial.print(customWordCount - 1);
+    Serial.print(": \""); Serial.print(rest); Serial.println("\" (saved)\n");
+  } else if (sub == "remove") {
+    if (rest.length() == 0) { Serial.println(">>> Usage: word remove <index>\n"); return; }
+    int idx = rest.toInt();
+    if (idx < 0 || idx >= customWordCount) {
+      Serial.println(">>> Invalid index, use 'word list' to see indices\n"); return;
+    }
+    // Shift elements down
+    for (int i = idx; i < customWordCount - 1; i++) {
+      customWords[i] = customWords[i + 1];
+      String key = "w" + String(i);
+      prefs.putString(key.c_str(), customWords[i]);
+    }
+    String lastKey = "w" + String(customWordCount - 1);
+    prefs.remove(lastKey.c_str());
+    customWordCount--;
+    prefs.putInt("wordCount", customWordCount);
+    Serial.print(">>> Removed word #"); Serial.print(idx); Serial.println(" (saved)\n");
+  } else if (sub == "clear") {
+    for (int i = 0; i < customWordCount; i++) {
+      String key = "w" + String(i);
+      prefs.remove(key.c_str());
+    }
+    customWordCount = 0;
+    prefs.putInt("wordCount", 0);
+    Serial.println(">>> Custom word pool cleared\n");
+  } else {
+    Serial.println(">>> Usage: word [list|add <text>|remove <index>|clear]\n");
   }
 }
 
-// Reset all settings to defaults and clear NVS so the next boot also starts fresh
+// === RESET ===
 void resetDefaults() {
-  wpmMin = DEFAULT_WPM_MIN;
-  wpmMax = DEFAULT_WPM_MAX;
-  intervalMinSec = DEFAULT_INTERVAL_MIN_SEC;
-  intervalMaxSec = DEFAULT_INTERVAL_MAX_SEC;
-  fieldSize = DEFAULT_FIELD;
-  qwertz = DEFAULT_QWERTZ;
-  mouseEnabled = DEFAULT_MOUSE_ENABLED;
-  keyboardEnabled = DEFAULT_KEYBOARD_ENABLED;
-  vx = fieldSize / 2.0;
-  vy = fieldSize / 2.0;
-  prefs.clear(); // wipe stored settings
+  wpmMin = DEFAULT_WPM_MIN; wpmMax = DEFAULT_WPM_MAX;
+  intervalMinSec = DEFAULT_INTERVAL_MIN_SEC; intervalMaxSec = DEFAULT_INTERVAL_MAX_SEC;
+  fieldSize = DEFAULT_FIELD; qwertz = DEFAULT_QWERTZ;
+  mouseEnabled = DEFAULT_MOUSE_ENABLED; keyboardEnabled = DEFAULT_KEYBOARD_ENABLED;
+  customWordCount = 0;
+  vx = fieldSize / 2.0; vy = fieldSize / 2.0;
+  prefs.clear();
 }
 
 // === STATUS / HELP ===
 void printStatus() {
   Serial.println("\n>>> Status:");
-  Serial.print("  Wiggler:  ");
-  Serial.println(wigglerActive ? "ACTIVE" : "PAUSED");
-  Serial.print("  BLE:      ");
-  Serial.println(keyboard.isConnected() ? "CONNECTED" : "DISCONNECTED");
-  Serial.print("  Layout:   ");
-  Serial.println(qwertz ? "QWERTZ" : "QWERTY");
-  Serial.print("  Mouse:    ");
-  Serial.println(mouseEnabled ? "ON" : "OFF");
-  Serial.print("  Keyboard: ");
-  Serial.println(keyboardEnabled ? "ON" : "OFF");
-  Serial.print("  WPM:      ");
-  Serial.print(wpmMin);
-  Serial.print(" - ");
-  Serial.println(wpmMax);
-  Serial.print("  Interval: ");
-  Serial.print(intervalMinSec);
-  Serial.print(" - ");
-  Serial.print(intervalMaxSec);
-  Serial.println(" s");
-  Serial.print("  Field:    ");
-  Serial.print(fieldSize);
-  Serial.print(" x ");
-  Serial.print(fieldSize);
-  Serial.println(" px");
+  Serial.print("  Wiggler:  "); Serial.println(wigglerActive ? "ACTIVE" : "PAUSED");
+  Serial.print("  BLE:      "); Serial.println(keyboard.isConnected() ? "CONNECTED" : "DISCONNECTED");
+  Serial.print("  Layout:   "); Serial.println(qwertz ? "QWERTZ" : "QWERTY");
+  Serial.print("  Mouse:    "); Serial.println(mouseEnabled ? "ON" : "OFF");
+  Serial.print("  Keyboard: "); Serial.println(keyboardEnabled ? "ON" : "OFF");
+  Serial.print("  WPM:      "); Serial.print(wpmMin); Serial.print(" - "); Serial.println(wpmMax);
+  Serial.print("  Interval: "); Serial.print(intervalMinSec); Serial.print(" - ");
+  Serial.print(intervalMaxSec); Serial.println(" s");
+  Serial.print("  Field:    "); Serial.print(fieldSize); Serial.print(" x ");
+  Serial.print(fieldSize); Serial.println(" px");
+  Serial.print("  Custom words: "); Serial.print(customWordCount);
+  Serial.print(" / "); Serial.println(MAX_CUSTOM_WORDS);
   Serial.println("  Settings: persisted to NVS, restored on boot");
   if (wigglerActive && keyboard.isConnected()) {
     unsigned long now = millis();
     if (lastAction + interval > now) {
-      Serial.print("  Next:     in ");
-      Serial.print((lastAction + interval - now) / 1000);
+      Serial.print("  Next:     in "); Serial.print((lastAction + interval - now) / 1000);
       Serial.println(" s");
-    } else {
-      Serial.println("  Next:     pending");
-    }
+    } else Serial.println("  Next:     pending");
   }
   Serial.println();
 }
@@ -591,17 +612,28 @@ void printHelp() {
   Serial.println("    status                 - show current state and settings");
   Serial.println("    help                   - show this help (alias: ?)");
   Serial.println();
-  Serial.println("  Configuration (auto-saved to NVS on change):");
+  Serial.println("  Configuration (auto-saved to NVS):");
   Serial.println("    wpm <min> <max>        - typing speed in WPM (10-200)");
   Serial.println("    interval <min> <max>   - delay between actions in seconds (1-3600)");
   Serial.println("    field <size>           - mouse field size in px (50-2000)");
   Serial.println("    layout <qwerty|qwertz> - keyboard layout");
   Serial.println("    mouse <on|off>         - enable/disable mouse actions");
   Serial.println("    keyboard <on|off>      - enable/disable keyboard actions");
-  Serial.println("    reset                  - reset all settings, clear NVS");
+  Serial.println();
+  Serial.println("  Profiles (preset bundles, do not change layout):");
+  Serial.println("    profile                - list available profiles");
+  Serial.println("    profile <name>         - apply: work, stealth, intense, test");
+  Serial.println();
+  Serial.println("  Custom word pool (auto-saved):");
+  Serial.println("    word list              - show current custom words");
+  Serial.println("    word add <text>        - add a custom word or phrase");
+  Serial.println("    word remove <index>    - remove by index from 'word list'");
+  Serial.println("    word clear             - remove all custom words");
+  Serial.println();
+  Serial.println("  Other:");
+  Serial.println("    reset                  - reset all settings, clear NVS, clear words");
   Serial.println();
   Serial.println("  Configuration commands without arguments show the current value.");
-  Serial.println("  Settings persist across power cycles.");
   Serial.println();
 }
 
@@ -609,18 +641,11 @@ void printHelp() {
 void doMouseMovement() {
   int targetCount = random(2, 6);
 
-  Serial.print("  MOUSE: ");
-  Serial.print(targetCount);
-  Serial.print(" targets in ");
-  Serial.print(fieldSize);
-  Serial.print("x");
-  Serial.print(fieldSize);
-  Serial.println(" field");
+  Serial.print("  MOUSE: "); Serial.print(targetCount); Serial.print(" targets in ");
+  Serial.print(fieldSize); Serial.print("x"); Serial.print(fieldSize); Serial.println(" field");
 
   for (int z = 0; z < targetCount; z++) {
-    handleButton();
-    handleSerial();
-    updateLed();
+    handleButton(); handleSerial(); updateLed();
     if (!wigglerActive) break;
 
     float targetX = random(MARGIN, fieldSize - MARGIN);
@@ -645,11 +670,8 @@ void doMouseMovement() {
 }
 
 void moveTo(float targetX, float targetY) {
-  float startX = vx;
-  float startY = vy;
-
-  float dx = targetX - startX;
-  float dy = targetY - startY;
+  float startX = vx, startY = vy;
+  float dx = targetX - startX, dy = targetY - startY;
   float dist = sqrt(dx * dx + dy * dy);
   if (dist < 1.0) return;
 
@@ -665,13 +687,10 @@ void moveTo(float targetX, float targetY) {
   if (random(0, 10) < 5) { speedMin = 2; speedMax = 7; }
   else                   { speedMin = 5; speedMax = 14; }
 
-  float prevX = startX;
-  float prevY = startY;
+  float prevX = startX, prevY = startY;
 
   for (int i = 1; i <= steps; i++) {
-    handleButton();
-    handleSerial();
-    updateLed();
+    handleButton(); handleSerial(); updateLed();
     if (!wigglerActive) break;
 
     float t = (float)i / steps;
@@ -686,14 +705,12 @@ void moveTo(float targetX, float targetY) {
 
     if (stepX != 0 || stepY != 0) {
       mouse.move(stepX, stepY);
-      prevX += stepX;
-      prevY += stepY;
+      prevX += stepX; prevY += stepY;
     }
     delay(random(speedMin, speedMax));
   }
 
-  vx = prevX;
-  vy = prevY;
+  vx = prevX; vy = prevY;
 }
 
 // === KEYBOARD ===
@@ -709,21 +726,26 @@ char remapForLayout(char c) {
 int humanDelay(int baseDelay, bool withPauses) {
   int variation = random(-baseDelay / 3, baseDelay / 3 + 1);
   int d = baseDelay + variation;
-  if (withPauses && random(0, 12) == 0) {
-    d += random(120, 350);
-  }
+  if (withPauses && random(0, 12) == 0) d += random(120, 350);
   if (d < 40) d = 40;
   return d;
 }
 
 void typeInEditor() {
-  const char* text;
-  if (random(0, 10) < 4) {
-    text = phrases[random(0, phraseCount)];
+  // Pick text source based on availability of custom words.
+  // With custom words: ~33% custom, ~27% built-in phrase, ~40% built-in word.
+  // Without custom words: original 40% phrase, 60% word.
+  String text;
+  if (customWordCount > 0) {
+    int roll = random(0, 100);
+    if (roll < 33) text = customWords[random(0, customWordCount)];
+    else if (roll < 60) text = String(phrases[random(0, phraseCount)]);
+    else text = String(words[random(0, wordCount)]);
   } else {
-    text = words[random(0, wordCount)];
+    if (random(0, 10) < 4) text = String(phrases[random(0, phraseCount)]);
+    else text = String(words[random(0, wordCount)]);
   }
-  int len = strlen(text);
+  int len = text.length();
 
   int wpm = random(wpmMin, wpmMax + 1);
   int baseDelay = 60000 / (wpm * 5);
@@ -731,17 +753,13 @@ void typeInEditor() {
 
   Serial.print("  KEY: \"");
   Serial.print(text);
-  Serial.print("\" @ ");
-  Serial.print(wpm);
-  Serial.println(" WPM");
+  Serial.print("\" @ "); Serial.print(wpm); Serial.println(" WPM");
 
   int typed = 0;
   for (int i = 0; i < len; i++) {
-    handleButton();
-    handleSerial();
-    updateLed();
+    handleButton(); handleSerial(); updateLed();
     if (!wigglerActive) break;
-    keyboard.write(remapForLayout(text[i]));
+    keyboard.write(remapForLayout(text.charAt(i)));
     typed++;
     delay(humanDelay(baseDelay, true));
   }

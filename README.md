@@ -1,5 +1,7 @@
 # ESP32-C3 BLE Wiggler
 
+![Build](https://github.com/YOUR_USER/YOUR_REPO/actions/workflows/build.yml/badge.svg)
+
 A Bluetooth mouse and keyboard jiggler for the ESP32-C3 SuperMini. It keeps a machine from going idle by nudging the cursor around and typing the odd word, with timing that looks human instead of robotic. Nothing to install on the host. It pairs as a normal Bluetooth input device.
 
 I made this so my work laptop stops dropping to idle during long calls and reading sessions. Power is the only cable it needs. Everything else runs over BLE.
@@ -12,8 +14,8 @@ I made this so my work laptop stops dropping to idle during long calls and readi
 - Waits a random interval between actions (defaults to 10 to 90 seconds)
 - Pauses and resumes from the onboard BOOT button
 - Shows its state on the onboard LED
-- Accepts text commands over serial: pause, resume, status, and a full set of runtime configuration commands. WPM, interval, field size, layout, and per-mode toggles can all be changed live without reflashing
-- Persists all settings to NVS automatically, so changes survive a power cycle
+- Accepts text commands over serial: pause, resume, status, profile presets, runtime configuration, and a custom word pool
+- Persists all settings and custom words to NVS automatically, so changes survive a power cycle
 - Supports QWERTY and QWERTZ keyboard layouts
 - Logs to serial only when a host has the port open, so it stays quiet on a power bank
 
@@ -71,7 +73,7 @@ const bool DEFAULT_MOUSE_ENABLED = true;
 const bool DEFAULT_KEYBOARD_ENABLED = true;
 ```
 
-**Runtime settings via serial commands** (auto-saved to NVS, see Usage). Every change made through `wpm`, `interval`, `field`, `layout`, `mouse`, or `keyboard` is written to flash immediately and reloaded on the next boot. Run `reset` to wipe stored settings and fall back to the sketch defaults.
+**Runtime settings via serial commands**. All settings and custom words are auto-saved to NVS, see Usage below. Run `reset` to wipe stored values and fall back to sketch defaults.
 
 About the layout default: the wiggler sends key positions over HID, not characters. A QWERTZ host turns `yet` into `zet` because Y and Z sit on swapped keys. With `DEFAULT_QWERTZ = true`, the code swaps y and z before sending. Set to `false` for QWERTY.
 
@@ -133,7 +135,29 @@ Configuration (auto-saved to NVS, no arguments shows current value):
 | `layout <qwerty\|qwertz>` | - | Keyboard layout |
 | `mouse <on\|off>` | - | Enable/disable mouse actions |
 | `keyboard <on\|off>` | - | Enable/disable keyboard actions |
-| `reset` | - | Reset settings to sketch defaults, clear NVS |
+| `reset` | - | Reset all settings and custom words, clear NVS |
+
+Profiles (preset bundles, the layout setting is left untouched because it depends on the host):
+
+| Profile | WPM | Interval | Field | Modes |
+|---|---|---|---|---|
+| `work` | 60-80 | 30-120 s | 600 | mouse + keyboard |
+| `stealth` | 50-70 | 120-300 s | 400 | mouse only |
+| `intense` | 80-110 | 5-30 s | 800 | mouse + keyboard |
+| `test` | 80-100 | 5-10 s | 400 | mouse + keyboard (for demos) |
+
+Apply with `profile <name>`, list available with `profile` alone.
+
+Custom word pool (auto-saved, up to 20 words/phrases, max 50 chars each):
+
+| Command | Effect |
+|---|---|
+| `word` or `word list` | Show current custom words with indices |
+| `word add <text>` | Add a word or phrase, trailing space is added automatically |
+| `word remove <index>` | Remove by index from `word list` |
+| `word clear` | Remove all custom words |
+
+When custom words are present, the typing logic uses them roughly one third of the time, mixed with the built-in pool. Useful for adding company- or context-specific terms that blend in better than generic placeholders.
 
 You cannot disable both mouse and keyboard at the same time, the wiggler needs at least one. Commands work mid-action, same as the BOOT button. On a power bank without a host, serial is gone and the button is the only control.
 
@@ -153,6 +177,10 @@ For a jiggler this barely matters. The cursor only has to look alive. If it keep
 I print mine into a case by **i-BoxIt**: [ESP32-C3 SuperMini Case Options](https://makerworld.com/de/models/1072508-esp32-c3-supermini-case-options). It has cutouts for the LEDs and a flexible section that lets you press the button without a separate part. ASA holds up well if it sits near a window.
 
 The case is i-BoxIt's design, not mine. Check the license on the MakerWorld page before you redistribute the model or a remix. The code here and the case are licensed separately, so don't bundle the STL into this repo. Just link to it.
+
+## Continuous integration
+
+A GitHub Actions workflow under `.github/workflows/build.yml` compiles the sketch against ESP32 Core 2.0.17 and the BleCombo library on every push to `main` and on pull requests. The badge at the top of this README reflects the latest build state. Update the badge URL to point at your fork once you publish.
 
 ## Changelog
 
