@@ -13,6 +13,7 @@ I made this so my work laptop stops dropping to idle during long calls and readi
 - Pauses and resumes from the onboard BOOT button
 - Shows its state on the onboard LED
 - Logs to serial only when a host has the port open, so it stays quiet on a power bank
+- Supports QWERTY and QWERTZ keyboard layouts via a single constant
 
 ## Hardware
 
@@ -48,6 +49,18 @@ The combo library targets **ESP32 Arduino Core 2.x**. It will not compile on 3.x
 | JTAG Adapter | Disabled |
 
 Get `USB CDC On Boot` right. Leave it off and the serial monitor over USB stays dead.
+
+## Configuration
+
+Before flashing, open `esp32_ble_wiggler.ino` and check one constant near the top:
+
+```cpp
+const bool QWERTZ = true;
+```
+
+Leave it at `true` if your host uses a German (or any QWERTZ) keyboard layout, set it to `false` for QWERTY (US, UK, most others). The wiggler sends key positions over HID, not characters. Without the flag a QWERTZ host turns `yet` into `zet`, because Y and Z sit on swapped keys. The constant swaps them before sending so the output matches the source.
+
+This covers the included word pool. If you later add umlauts or special characters, you'll need more layout handling than this single flag.
 
 ## Flashing
 
@@ -91,6 +104,10 @@ For a jiggler this barely matters. The cursor only has to look alive. If it keep
 I print mine into a case by **i-BoxIt**: [ESP32-C3 SuperMini Case Options](https://makerworld.com/de/models/1072508-esp32-c3-supermini-case-options). It has cutouts for the LEDs and a flexible section that lets you press the button without a separate part. ASA holds up well if it sits near a window.
 
 The case is i-BoxIt's design, not mine. Check the license on the MakerWorld page before you redistribute the model or a remix. The code here and the case are licensed separately, so don't bundle the STL into this repo. Just link to it.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the version history.
 
 ## Disclaimer
 

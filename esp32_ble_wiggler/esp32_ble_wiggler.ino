@@ -10,6 +10,8 @@
  * Controls:
  *   BOOT button (GPIO 9) - pause / resume at any time
  *   Onboard LED (GPIO 8) - status indicator (heartbeat = active, solid = paused)
+ *
+ * Version: 1.1.0
  */
 
 #include <BleCombo.h>
@@ -47,6 +49,12 @@ const char* phrases[] = {
 };
 const int phraseCount = 12;
 
+// === KEYBOARD LAYOUT ===
+// Set to true if the host computer uses a QWERTZ layout (e.g. German keyboards).
+// This swaps y/z before sending so the output matches what you actually want.
+// Set to false for QWERTY (US/UK and most other layouts).
+const bool QWERTZ = true;
+
 // === BOOT BUTTON / PAUSE TOGGLE (interrupt based) ===
 const int BUTTON_PIN = 9;                 // GPIO 9 = BOOT button on the C3 SuperMini
 volatile bool buttonPressed = false;      // set inside the ISR
@@ -74,7 +82,7 @@ void setup() {
   delay(1500);
 
   Serial.println("\n========================================");
-  Serial.println("   ESP32-C3 BLE Wiggler started");
+  Serial.println("   ESP32-C3 BLE Wiggler v1.1.0");
   Serial.println("========================================");
 
   // BOOT button as input with pull-up, interrupt on falling edge
@@ -91,6 +99,8 @@ void setup() {
 
   Serial.println("BLE advertising active");
   Serial.println("Device name: Logitech Combo");
+  Serial.print("Keyboard layout: ");
+  Serial.println(QWERTZ ? "QWERTZ (y/z swapped)" : "QWERTY");
   Serial.println("BOOT button (GPIO 9): pause anytime");
   Serial.println("Status LED (GPIO 8): heartbeat = active, solid = paused");
   Serial.println("Waiting for connection...\n");
@@ -295,6 +305,18 @@ void moveTo(float targetX, float targetY) {
 }
 
 // === KEYBOARD ===
+// Swaps y and z when the host uses a QWERTZ layout.
+// Other QWERTY/QWERTZ differences (special chars, umlauts) are not handled,
+// but the word pool only uses lowercase letters and spaces, so this is enough.
+char remapForLayout(char c) {
+  if (!QWERTZ) return c;
+  if (c == 'y') return 'z';
+  if (c == 'z') return 'y';
+  if (c == 'Y') return 'Z';
+  if (c == 'Z') return 'Y';
+  return c;
+}
+
 // Returns a realistic keystroke delay in ms.
 // baseDelay = base pace, withPauses adds occasional longer pauses.
 int humanDelay(int baseDelay, bool withPauses) {
@@ -334,7 +356,7 @@ void typeInEditor() {
     handleButton();
     updateLed();
     if (!wigglerActive) break;
-    keyboard.write(text[i]);
+    keyboard.write(remapForLayout(text[i])); // remap before sending
     typed++;
     delay(humanDelay(baseDelay, true)); // typing: with thinking pauses
   }
