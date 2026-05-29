@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-29
+
+### Added
+- Persistent settings via NVS (non-volatile storage). All configuration changes through serial commands are automatically written to flash and restored on the next boot. No new commands required, persistence is transparent.
+- Boot message reports whether settings were restored from NVS or defaults are in use.
+- `status` output now shows that settings are persisted.
+
+### Changed
+- The `reset` command now also clears the NVS namespace, so the next boot starts fresh on defaults.
+- Help text updated to indicate that configuration commands auto-save.
+
+### Notes
+- Uses the `Preferences` library that ships with the ESP32 Arduino Core, no extra installs.
+- Stored keys live in the `wiggler` namespace (8 keys: `wpmMin`, `wpmMax`, `intMin`, `intMax`, `field`, `qwertz`, `mouseOn`, `kbdOn`).
+- Updating from v1.3.0 keeps previously made runtime settings only after they have been re-entered, since v1.3.0 did not write to NVS. Settings configured after the v1.4.0 update will persist normally from that point on.
+
 ## [1.3.0] - 2026-05-29
 
 ### Added
@@ -22,7 +38,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Mode selection in the main loop respects the `mouseEnabled` and `keyboardEnabled` flags. If only one is on, only that action type runs.
 
 ### Notes
-- Runtime changes are not persisted. After a power cycle, settings revert to the sketch defaults. For permanent changes, edit the `DEFAULT_*` constants and reflash. Optional NVS-based persistence could come in a later release.
+- Runtime changes are not persisted in this version. v1.4.0 adds NVS persistence.
 - Disabling both modes at once is prevented. The wiggler needs at least one action type enabled.
 
 ## [1.2.0] - 2026-05-29

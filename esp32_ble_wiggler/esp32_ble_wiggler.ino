@@ -12,10 +12,15 @@
  *   Onboard LED (GPIO 8) - status indicator (heartbeat = active, solid = paused)
  *   Serial commands     - type 'help' for the full list
  *
- * Version: 1.3.0
+ * Version: 1.4.0
+ *
+ * Settings persistence: All configuration changes via serial commands are
+ * automatically stored in NVS (non-volatile storage) and restored on every
+ * boot. Use 'reset' to clear stored settings and return to sketch defaults.
  */
 
 #include <BleCombo.h>
+#include <Preferences.h>
 
 // Device identity as seen in the host's Bluetooth list
 BleComboKeyboard keyboard("Logitech Combo", "Logitech", 100);
@@ -51,10 +56,7 @@ const char* phrases[] = {
 };
 const int phraseCount = 12;
 
-// === RUNTIME CONFIGURATION DEFAULTS ===
-// These are the values used on every boot. To change them permanently,
-// edit the constants and reflash. To change them for the current session,
-// use the serial commands (see 'help').
+// === DEFAULTS (used when NVS is empty or after 'reset') ===
 const int DEFAULT_WPM_MIN = 60;
 const int DEFAULT_WPM_MAX = 80;
 const unsigned long DEFAULT_INTERVAL_MIN_SEC = 10;
@@ -64,15 +66,19 @@ const bool DEFAULT_QWERTZ = true;
 const bool DEFAULT_MOUSE_ENABLED = true;
 const bool DEFAULT_KEYBOARD_ENABLED = true;
 
-// === RUNTIME SETTINGS (changeable via serial) ===
-int wpmMin = DEFAULT_WPM_MIN;
-int wpmMax = DEFAULT_WPM_MAX;
-unsigned long intervalMinSec = DEFAULT_INTERVAL_MIN_SEC;
-unsigned long intervalMaxSec = DEFAULT_INTERVAL_MAX_SEC;
-int fieldSize = DEFAULT_FIELD;
-bool qwertz = DEFAULT_QWERTZ;
-bool mouseEnabled = DEFAULT_MOUSE_ENABLED;
-bool keyboardEnabled = DEFAULT_KEYBOARD_ENABLED;
+// === RUNTIME SETTINGS (loaded from NVS in setup, modified via serial) ===
+int wpmMin;
+int wpmMax;
+unsigned long intervalMinSec;
+unsigned long intervalMaxSec;
+int fieldSize;
+bool qwertz;
+bool mouseEnabled;
+bool keyboardEnabled;
+
+// === PERSISTENT STORAGE (NVS) ===
+Preferences prefs;
+const char* PREFS_NS = "wiggler";
 
 // === BOOT BUTTON / PAUSE TOGGLE ===
 const int BUTTON_PIN = 9;
@@ -87,8 +93,8 @@ bool ledState = false;
 unsigned long lastLedToggle = 0;
 
 // === VIRTUAL MOUSE POSITION ===
-float vx, vy;            // initialized in setup based on fieldSize
-const int MARGIN = 20;   // safety margin to the field edge
+float vx, vy;
+const int MARGIN = 20;
 
 // === SERIAL COMMAND BUFFER ===
 String serialBuffer = "";
@@ -103,8 +109,13 @@ void setup() {
   delay(1500);
 
   Serial.println("\n========================================");
-  Serial.println("   ESP32-C3 BLE Wiggler v1.3.0");
+  Serial.println("   ESP32-C3 BLE Wiggler v1.4.0");
   Serial.println("========================================");
+
+  // Open NVS namespace in read/write mode and load settings
+  prefs.begin(PREFS_NS, false);
+  bool hasStored = prefs.isKey("wpmMin"); // any key works as a marker
+  loadSettings();
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), buttonISR, FALLING);
@@ -123,6 +134,8 @@ void setup() {
   Serial.println("Device name: Logitech Combo");
   Serial.print("Layout: ");
   Serial.println(qwertz ? "QWERTZ" : "QWERTY");
+  Serial.print("Settings: ");
+  Serial.println(hasStored ? "restored from NVS" : "using defaults (no saved settings)");
   Serial.println("Type 'help' for serial commands, 'status' for current settings");
   Serial.println("Waiting for connection...\n");
 }
@@ -148,7 +161,6 @@ void loop() {
     return;
   }
 
-  // Skip if both action modes are disabled (should be prevented by validation)
   if (!mouseEnabled && !keyboardEnabled) {
     delay(20);
     return;
@@ -160,12 +172,11 @@ void loop() {
     if (forceAction || now - lastAction >= interval) {
       forceAction = false;
 
-      // Decide what to do based on enabled modes
       bool doMouse = false;
       bool doKeyboard = false;
 
       if (mouseEnabled && keyboardEnabled) {
-        int action = random(0, 4); // 0,1 = mouse, 2 = keyboard, 3 = both
+        int action = random(0, 4);
         doMouse = (action <= 1 || action == 3);
         doKeyboard = (action == 2 || action == 3);
       } else if (mouseEnabled) {
@@ -199,6 +210,19 @@ void loop() {
     }
   }
   delay(20);
+}
+
+// === NVS PERSISTENCE ===
+// Load all settings from NVS. Missing keys fall back to defaults.
+void loadSettings() {
+  wpmMin         = prefs.getInt("wpmMin", DEFAULT_WPM_MIN);
+  wpmMax         = prefs.getInt("wpmMax", DEFAULT_WPM_MAX);
+  intervalMinSec = prefs.getULong("intMin", DEFAULT_INTERVAL_MIN_SEC);
+  intervalMaxSec = prefs.getULong("intMax", DEFAULT_INTERVAL_MAX_SEC);
+  fieldSize      = prefs.getInt("field", DEFAULT_FIELD);
+  qwertz         = prefs.getBool("qwertz", DEFAULT_QWERTZ);
+  mouseEnabled   = prefs.getBool("mouseOn", DEFAULT_MOUSE_ENABLED);
+  keyboardEnabled= prefs.getBool("kbdOn", DEFAULT_KEYBOARD_ENABLED);
 }
 
 // === LED CONTROL ===
@@ -248,8 +272,6 @@ void handleButton() {
 }
 
 // === SERIAL COMMANDS ===
-// Non-blocking serial reader: collects characters into a buffer until newline,
-// then dispatches the command.
 void handleSerial() {
   while (Serial.available() > 0) {
     char c = Serial.read();
@@ -269,8 +291,6 @@ void handleSerial() {
   }
 }
 
-// Helper: split a string at the first space into two parts.
-// Returns true if a space was found.
 bool splitAtSpace(String input, String &first, String &second) {
   input.trim();
   int sp = input.indexOf(' ');
@@ -291,7 +311,6 @@ void processCommand(String cmd) {
   cmd.toLowerCase();
   if (cmd.length() == 0) return;
 
-  // Split command into name and arguments
   String name, args;
   splitAtSpace(cmd, name, args);
 
@@ -330,7 +349,7 @@ void processCommand(String cmd) {
     printHelp();
   } else if (name == "reset") {
     resetDefaults();
-    Serial.println(">>> Settings reset to defaults\n");
+    Serial.println(">>> Settings reset to defaults, NVS cleared\n");
   } else if (name == "wpm") {
     cmdWpm(args);
   } else if (name == "interval") {
@@ -351,7 +370,7 @@ void processCommand(String cmd) {
   }
 }
 
-// === CONFIG COMMANDS ===
+// === CONFIG COMMANDS (each persists its setting to NVS on success) ===
 void cmdWpm(String args) {
   if (args.length() == 0) {
     Serial.print(">>> WPM: ");
@@ -373,11 +392,13 @@ void cmdWpm(String args) {
   }
   wpmMin = newMin;
   wpmMax = newMax;
+  prefs.putInt("wpmMin", wpmMin);
+  prefs.putInt("wpmMax", wpmMax);
   Serial.print(">>> WPM set to ");
   Serial.print(wpmMin);
   Serial.print(" - ");
-  Serial.println(wpmMax);
-  Serial.println();
+  Serial.print(wpmMax);
+  Serial.println(" (saved)\n");
 }
 
 void cmdInterval(String args) {
@@ -402,11 +423,13 @@ void cmdInterval(String args) {
   }
   intervalMinSec = (unsigned long)newMin;
   intervalMaxSec = (unsigned long)newMax;
+  prefs.putULong("intMin", intervalMinSec);
+  prefs.putULong("intMax", intervalMaxSec);
   Serial.print(">>> Interval set to ");
   Serial.print(intervalMinSec);
   Serial.print(" - ");
   Serial.print(intervalMaxSec);
-  Serial.println(" s\n");
+  Serial.println(" s (saved)\n");
 }
 
 void cmdField(String args) {
@@ -424,14 +447,14 @@ void cmdField(String args) {
     return;
   }
   fieldSize = newSize;
-  // Clamp the virtual position so it stays inside the new field
   vx = constrain(vx, (float)MARGIN, (float)(fieldSize - MARGIN));
   vy = constrain(vy, (float)MARGIN, (float)(fieldSize - MARGIN));
+  prefs.putInt("field", fieldSize);
   Serial.print(">>> Field set to ");
   Serial.print(fieldSize);
   Serial.print(" x ");
   Serial.print(fieldSize);
-  Serial.println(" px\n");
+  Serial.println(" px (saved)\n");
 }
 
 void cmdLayout(String args) {
@@ -442,10 +465,12 @@ void cmdLayout(String args) {
   }
   if (args == "qwertz") {
     qwertz = true;
-    Serial.println(">>> Layout set to QWERTZ\n");
+    prefs.putBool("qwertz", qwertz);
+    Serial.println(">>> Layout set to QWERTZ (saved)\n");
   } else if (args == "qwerty") {
     qwertz = false;
-    Serial.println(">>> Layout set to QWERTY\n");
+    prefs.putBool("qwertz", qwertz);
+    Serial.println(">>> Layout set to QWERTY (saved)\n");
   } else {
     Serial.println(">>> Usage: layout <qwerty|qwertz>\n");
   }
@@ -459,14 +484,16 @@ void cmdMouse(String args) {
   }
   if (args == "on") {
     mouseEnabled = true;
-    Serial.println(">>> Mouse: ON\n");
+    prefs.putBool("mouseOn", mouseEnabled);
+    Serial.println(">>> Mouse: ON (saved)\n");
   } else if (args == "off") {
     if (!keyboardEnabled) {
       Serial.println(">>> Cannot disable mouse, keyboard is already off. Enable keyboard first.\n");
       return;
     }
     mouseEnabled = false;
-    Serial.println(">>> Mouse: OFF\n");
+    prefs.putBool("mouseOn", mouseEnabled);
+    Serial.println(">>> Mouse: OFF (saved)\n");
   } else {
     Serial.println(">>> Usage: mouse <on|off>\n");
   }
@@ -480,19 +507,22 @@ void cmdKeyboard(String args) {
   }
   if (args == "on") {
     keyboardEnabled = true;
-    Serial.println(">>> Keyboard: ON\n");
+    prefs.putBool("kbdOn", keyboardEnabled);
+    Serial.println(">>> Keyboard: ON (saved)\n");
   } else if (args == "off") {
     if (!mouseEnabled) {
       Serial.println(">>> Cannot disable keyboard, mouse is already off. Enable mouse first.\n");
       return;
     }
     keyboardEnabled = false;
-    Serial.println(">>> Keyboard: OFF\n");
+    prefs.putBool("kbdOn", keyboardEnabled);
+    Serial.println(">>> Keyboard: OFF (saved)\n");
   } else {
     Serial.println(">>> Usage: keyboard <on|off>\n");
   }
 }
 
+// Reset all settings to defaults and clear NVS so the next boot also starts fresh
 void resetDefaults() {
   wpmMin = DEFAULT_WPM_MIN;
   wpmMax = DEFAULT_WPM_MAX;
@@ -504,6 +534,7 @@ void resetDefaults() {
   keyboardEnabled = DEFAULT_KEYBOARD_ENABLED;
   vx = fieldSize / 2.0;
   vy = fieldSize / 2.0;
+  prefs.clear(); // wipe stored settings
 }
 
 // === STATUS / HELP ===
@@ -533,6 +564,7 @@ void printStatus() {
   Serial.print(" x ");
   Serial.print(fieldSize);
   Serial.println(" px");
+  Serial.println("  Settings: persisted to NVS, restored on boot");
   if (wigglerActive && keyboard.isConnected()) {
     unsigned long now = millis();
     if (lastAction + interval > now) {
@@ -559,17 +591,17 @@ void printHelp() {
   Serial.println("    status                 - show current state and settings");
   Serial.println("    help                   - show this help (alias: ?)");
   Serial.println();
-  Serial.println("  Configuration:");
+  Serial.println("  Configuration (auto-saved to NVS on change):");
   Serial.println("    wpm <min> <max>        - typing speed in WPM (10-200)");
   Serial.println("    interval <min> <max>   - delay between actions in seconds (1-3600)");
   Serial.println("    field <size>           - mouse field size in px (50-2000)");
   Serial.println("    layout <qwerty|qwertz> - keyboard layout");
   Serial.println("    mouse <on|off>         - enable/disable mouse actions");
   Serial.println("    keyboard <on|off>      - enable/disable keyboard actions");
-  Serial.println("    reset                  - reset all settings to defaults");
+  Serial.println("    reset                  - reset all settings, clear NVS");
   Serial.println();
   Serial.println("  Configuration commands without arguments show the current value.");
-  Serial.println("  Runtime changes are lost on power cycle, edit DEFAULT_* constants for permanent changes.");
+  Serial.println("  Settings persist across power cycles.");
   Serial.println();
 }
 
@@ -693,7 +725,6 @@ void typeInEditor() {
   }
   int len = strlen(text);
 
-  // Pace for this session: random within the configured WPM range
   int wpm = random(wpmMin, wpmMax + 1);
   int baseDelay = 60000 / (wpm * 5);
   int eraseDelay = baseDelay * 0.7;

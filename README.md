@@ -13,6 +13,7 @@ I made this so my work laptop stops dropping to idle during long calls and readi
 - Pauses and resumes from the onboard BOOT button
 - Shows its state on the onboard LED
 - Accepts text commands over serial: pause, resume, status, and a full set of runtime configuration commands. WPM, interval, field size, layout, and per-mode toggles can all be changed live without reflashing
+- Persists all settings to NVS automatically, so changes survive a power cycle
 - Supports QWERTY and QWERTZ keyboard layouts
 - Logs to serial only when a host has the port open, so it stays quiet on a power bank
 
@@ -37,6 +38,8 @@ The combo library targets **ESP32 Arduino Core 2.x**. It will not compile on 3.x
 2. In Boards Manager, install "esp32 by Espressif Systems" version **2.0.17**.
 3. The combo library is not in the Library Manager. Grab [ESP32-BLE-Combo](https://github.com/blackketter/ESP32-BLE-Combo) as a ZIP and add it through Sketch → Include Library → Add .ZIP Library.
 
+The `Preferences` library used for NVS persistence ships with the ESP32 Core. No extra install.
+
 ### Board settings (Tools menu)
 
 | Setting | Value |
@@ -53,9 +56,9 @@ Get `USB CDC On Boot` right. Leave it off and the serial monitor over USB stays 
 
 ## Configuration
 
-There are two layers:
+Two layers:
 
-**Sketch defaults** (used on every boot, edit before flashing). Near the top of `esp32_ble_wiggler.ino`:
+**Sketch defaults** (used when no saved settings exist, edit before flashing). Near the top of `esp32_ble_wiggler.ino`:
 
 ```cpp
 const bool DEFAULT_QWERTZ = true;
@@ -68,13 +71,15 @@ const bool DEFAULT_MOUSE_ENABLED = true;
 const bool DEFAULT_KEYBOARD_ENABLED = true;
 ```
 
-**Runtime settings** (changed via serial commands, see Usage). Everything in the list above can be modified live without reflashing. Runtime changes are not saved across power cycles. For permanent changes, edit the defaults and reflash, or use `reset` over serial to restore the defaults during a session.
+**Runtime settings via serial commands** (auto-saved to NVS, see Usage). Every change made through `wpm`, `interval`, `field`, `layout`, `mouse`, or `keyboard` is written to flash immediately and reloaded on the next boot. Run `reset` to wipe stored settings and fall back to the sketch defaults.
 
 About the layout default: the wiggler sends key positions over HID, not characters. A QWERTZ host turns `yet` into `zet` because Y and Z sit on swapped keys. With `DEFAULT_QWERTZ = true`, the code swaps y and z before sending. Set to `false` for QWERTY.
 
 ## Flashing
 
 Open `esp32_ble_wiggler/esp32_ble_wiggler.ino`, select the port, upload. If it refuses to connect, force the bootloader: hold BOOT, tap RESET (or replug USB), release BOOT, upload again.
+
+When you flash a new version over an existing one, stored settings stay in NVS and are picked up by the new firmware. Run `reset` afterwards if you want a clean slate.
 
 ## Pairing
 
@@ -100,7 +105,7 @@ One catch: BLE only advertises while nothing is connected. If one host is alread
 
 Most SuperMini boards wire this LED inverted (LOW = on), which the code already handles. If yours runs backwards or never lights up, the comments in `setLed()` tell you what to flip.
 
-**Serial commands:** plug the board into a host, open the serial monitor at 115200 baud, type a command, hit Enter. Useful when the board sits where the button is hard to reach, and for changing the behavior without reflashing.
+**Serial commands:** plug the board into a host, open the serial monitor at 115200 baud, type a command, hit Enter.
 
 Control:
 
@@ -118,7 +123,7 @@ Info:
 | `status` | Prints current state, BLE connection, and all settings |
 | `help` | Lists the commands (alias: `?`) |
 
-Configuration (without arguments these show the current value):
+Configuration (auto-saved to NVS, no arguments shows current value):
 
 | Command | Range | Effect |
 |---|---|---|
@@ -128,9 +133,11 @@ Configuration (without arguments these show the current value):
 | `layout <qwerty\|qwertz>` | - | Keyboard layout |
 | `mouse <on\|off>` | - | Enable/disable mouse actions |
 | `keyboard <on\|off>` | - | Enable/disable keyboard actions |
-| `reset` | - | Reset all settings to sketch defaults |
+| `reset` | - | Reset settings to sketch defaults, clear NVS |
 
 You cannot disable both mouse and keyboard at the same time, the wiggler needs at least one. Commands work mid-action, same as the BOOT button. On a power bank without a host, serial is gone and the button is the only control.
+
+**About NVS writes:** every configuration change writes to flash. NVS uses wear-leveling and the chip handles roughly 100k+ effective writes per cell with this scheme. At realistic usage (a handful of changes per week) that lasts well beyond the lifetime of the board.
 
 ## A note on drift
 
